@@ -8,6 +8,7 @@
 import express from 'express';
 import dotenv from 'dotenv';
 import path from 'path';
+import fs from 'node:fs';
 import { fileURLToPath } from 'url';
 
 dotenv.config();
@@ -393,9 +394,15 @@ Return JSON ONLY strictly adhering to:
 // Setup Vite middleware in dev or static serving in production
 async function startServer() {
   if (process.env.NODE_ENV === 'production') {
-    app.use(express.static(path.resolve(__dirname, 'dist')));
+    const candidatePaths = [
+      path.resolve(process.cwd(), 'dist'),
+      path.resolve(__dirname, 'dist'),
+      path.resolve(__dirname, '..', 'dist'),
+    ];
+    const distPath = candidatePaths.find((p) => fs.existsSync(p)) || candidatePaths[0];
+    app.use(express.static(distPath));
     app.get('*', (_req, res) => {
-      res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
+      res.sendFile(path.resolve(distPath, 'index.html'));
     });
   } else {
     const { createServer: createViteServer } = await import('vite');
