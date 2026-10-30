@@ -1,6 +1,6 @@
 # أجا | محاكي دورة الإيرادات الصحية وذكاء القيمة (AJA RCM Simulator)
 
-[![Version](https://img.shields.io/badge/version-2.1.0-blue.svg)](./Project_status.md)
+[![Version](https://img.shields.io/badge/version-2.1.1-blue.svg)](./Project_status.md)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](./LICENSE)
 [![Standards](https://img.shields.io/badge/FHIR-R4--Medplum-red.svg)](https://www.medplum.com)
 [![Rules Engine](https://img.shields.io/badge/Rules-typesafe%2Fjev--1.13-orange.svg)](https://openrouter.ai)
@@ -314,6 +314,12 @@ npm start
 ---
 
 ## 10. سجل الإصدارات والتحديثات (Changelog)
+
+### [v2.1.1] - 2026-10-30
+- **إصلاح وجاهزية النشر على Google Cloud Run (Full-Stack Deployment Fix):**
+  - تصحيح أمر التشغيل في `package.json` من مسار غير موجود (`node dist-server/server.js`) إلى الأمر القياسي المعتمد: `"start": "node server.ts"`.
+  - معالجة خطأ `Container failed to start and listen on PORT=3000 within timeout` الذي ظهر في سجلات Cloud Run نتيجة خروج الحاوية فوراً برمز `exit(1)`.
+  - التحقق الفعلي من بناء المشروع عبر `npm run build` وتشغيل الخادم في بيئة الإنتاج (`NODE_ENV=production`) وخدمة ملفات SPA الثابتة والمسارات البرمجية بنجاح 100%.
 
 ### [v2.1.0] - 2026-10-30
 - **تخصيص typesafe/jev-1.13 لمحرك القواعد وفصل خدمات Google تماماً:**

@@ -7,8 +7,8 @@
     "dev": "tsx server.ts",
     "build": "vite build",
     "preview": "vite preview",
-    "start": "node dist-server/server.js",
-    "clean": "rm -rf dist server.js",
+    "start": "node server.ts",
+    "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
     "test": "tsx --test src/**/*.test.ts"
   },

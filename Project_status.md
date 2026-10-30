@@ -1,8 +1,8 @@
 # حالة المشروع والمواصفات التقنية | Project Status & Technical Documentation
 **مشروع: أجا — محاكي دورة الإيرادات الصحية وذكاء القيمة (AJA RCM Simulator)**  
-**رقم النسخة الحالي (Current Version):** `v2.1.0`  
+**رقم النسخة الحالي (Current Version):** `v2.1.1`  
 **تاريخ الإصدار الحالي:** 30 أكتوبر 2026  
-**حالة النظام:** اعتماد حصري على OpenRouter (قواعد: typesafe/jev-1.13، استدلال: Qwen 2.5 72B) مع تعطيل تام لأي استهلاك لـ Google API
+**حالة النظام:** اعتماد حصري على OpenRouter، جاهزية تامة للنشر على Cloud Run (أمر البدء: node server.ts)
 
 ---
 
@@ -203,6 +203,12 @@
 ## 6. سجل التعديلات والتحديثات المستقبلية (Changelog & Version History)
 
 > **ملاحظة للمطورين:** يتم توثيق أي تعديل أو ميزة إضافية أو إصلاح مستقبلي في هذا القسم مع تحديث رقم النسخة في أعلى الملف.
+
+### [v2.1.1] - 2026-10-30
+- **إصلاح وجاهزية النشر على Google Cloud Run (Full-Stack Deployment Fix):**
+  - تصحيح أمر التشغيل في `package.json` من مسار غير موجود (`node dist-server/server.js`) إلى الأمر القياسي المعتمد: `"start": "node server.ts"`.
+  - معالجة خطأ `Container failed to start and listen on PORT=3000 within timeout` الذي ظهر في سجلات Cloud Run نتيجة خروج الحاوية فوراً برمز `exit(1)`.
+  - التحقق الفعلي من بناء المشروع عبر `npm run build` وتشغيل الخادم في بيئة الإنتاج (`NODE_ENV=production`) وخدمة ملفات SPA الثابتة والمسارات البرمجية بنجاح 100%.
 
 ### [v2.1.0] - 2026-10-30
 - **تخصيص typesafe/jev-1.13 لمحرك القواعد وفصل خدمات Google تماماً:**
