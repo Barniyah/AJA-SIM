@@ -1,0 +1,7 @@
+{
+  "name": "أجا | محاكي دورة الإيرادات وذكاء القيمة",
+  "description": "محاكي تفاعلي متقدم لدورة الإيرادات الصحية (RCM) وذكاء القيمة بالاستناد إلى FHIR وقواعد الأعمال والذكاء الاصطناعي والمراجعة البشرية",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
