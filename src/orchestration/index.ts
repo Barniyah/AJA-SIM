@@ -31,6 +31,7 @@ import { aiGateway } from '../adapters/ai';
 import { computeDataMinimization, MinimizationResult } from '../domain/minimization';
 import { createInitialMetrics } from '../domain/metrics';
 import { addSupplementaryRemittance, createInitialS5Ledger, halalasToSar } from '../domain/ledger';
+import { QuotaExceededError } from '../adapters/keyStore';
 
 export type OrchestratorListener = () => void;
 
@@ -43,6 +44,11 @@ export class SimulationOrchestrator {
   private isRunning = false;
   private isAutoRunning = false;
   private isCustomized = false;
+  private quotaAlert: {
+    isOpen: boolean;
+    message: string;
+    details?: string;
+  } | null = null;
 
   // Active state data
   private currentFixture: ScenarioFixture = SCENARIO_FIXTURES.S1;
@@ -116,11 +122,42 @@ export class SimulationOrchestrator {
       events: this.events,
       nodeStatuses: this.nodeStatuses,
       activeLearnedRule: rulesAdapter.getActiveLearnedRule(),
+      quotaAlert: this.quotaAlert,
     };
   }
 
   public setMode(newMode: 'demo-static' | 'live-ai') {
     this.mode = newMode;
+    this.notify();
+  }
+
+  public openQuotaModal(message?: string, details?: string) {
+    this.quotaAlert = {
+      isOpen: true,
+      message: message || 'إدارة مفتاح OpenRouter للوضع الحي وتفاصيل الرصيد',
+      details,
+    };
+    this.notify();
+  }
+
+  public closeQuotaModal() {
+    this.quotaAlert = null;
+    this.notify();
+  }
+
+  public handleQuotaExceeded(err: QuotaExceededError | Error) {
+    this.isAutoRunning = false;
+    this.isRunning = false;
+    const msg = err.message || 'نفد رصيد حساب OpenRouter للوضع الحي.';
+    const details = (err as QuotaExceededError).details;
+    this.quotaAlert = {
+      isOpen: true,
+      message: msg,
+      details,
+    };
+    this.nodeStatuses.ai.state = 'BLOCKED';
+    this.nodeStatuses.ai.infoAr = 'توقف: رصيد OpenRouter غير كافٍ';
+    this.emitEvent('system.quota_exhausted', `تنبيه رصيد الذكاء الاصطناعي: ${msg}`, { details });
     this.notify();
   }
 
@@ -141,6 +178,7 @@ export class SimulationOrchestrator {
     this.claimApproved = false;
     this.claimExported = false;
     this.settlementCompleted = false;
+    this.quotaAlert = null;
     this.processedActionKeys.clear();
 
     if (scenarioId === 'S5') {
@@ -189,7 +227,7 @@ export class SimulationOrchestrator {
   /**
    * Step 1: Run Business Rules Check
    */
-  public async executeRulesCheck(): Promise<RuleResult> {
+  public async executeRulesCheck(): Promise<RuleResult | null> {
     this.isRunning = true;
     this.nodeStatuses.core.state = 'PASS';
     this.nodeStatuses.rules.state = 'RUNNING';
@@ -198,60 +236,70 @@ export class SimulationOrchestrator {
     const startTime = performance.now();
     const doc = this.currentFixture.documents[0];
 
-    const result = await rulesAdapter.evaluate(
-      {
-        claimId: this.currentFixture.claim.id,
-        serviceCode: this.currentFixture.claim.serviceCode,
-        amount: this.currentFixture.claim.billedAmount,
-        memberId: this.currentFixture.patient.memberId,
-        serviceDate: this.currentFixture.claim.serviceDate,
-        diagnosisCode: this.currentFixture.claim.diagnosisCode,
-        hasSupportingDoc: this.currentFixture.claim.hasAttachmentInSubmission,
-        docId: doc?.id,
-        docText: doc?.text,
-        priorDenialCode: this.currentFixture.historicalDenial?.code,
-      },
-      this.mode
-    );
+    try {
+      const result = await rulesAdapter.evaluate(
+        {
+          claimId: this.currentFixture.claim.id,
+          serviceCode: this.currentFixture.claim.serviceCode,
+          amount: this.currentFixture.claim.billedAmount,
+          memberId: this.currentFixture.patient.memberId,
+          serviceDate: this.currentFixture.claim.serviceDate,
+          diagnosisCode: this.currentFixture.claim.diagnosisCode,
+          hasSupportingDoc: this.currentFixture.claim.hasAttachmentInSubmission,
+          docId: doc?.id,
+          docText: doc?.text,
+          priorDenialCode: this.currentFixture.historicalDenial?.code,
+        },
+        this.mode
+      );
 
-    const elapsed = Math.round(performance.now() - startTime);
-    this.ruleResult = result;
-    this.nodeStatuses.rules.measuredLatencyMs = elapsed;
+      const elapsed = Math.round(performance.now() - startTime);
+      this.ruleResult = result;
+      this.nodeStatuses.rules.measuredLatencyMs = elapsed;
 
-    // Track First-Pass Clean metric on version 1
-    if (this.inputVersion === 1) {
-      this.metrics.firstPassTotalEvaluated += 1;
-      if (result.passed) {
-        this.metrics.firstPassCleanCount += 1;
+      // Track First-Pass Clean metric on version 1
+      if (this.inputVersion === 1) {
+        this.metrics.firstPassTotalEvaluated += 1;
+        if (result.passed) {
+          this.metrics.firstPassCleanCount += 1;
+        }
       }
-    }
 
-    if (!result.passed) {
-      if (result.route === 'needs-correction') {
-        this.localStatus = 'تحتاج استكمالاً';
-        this.nodeStatuses.rules.state = 'BLOCKED';
-        this.nodeStatuses.rules.infoAr = result.violations[0]?.messageAr;
-        this.metrics.correctionRequiredCount += 1;
-        await updateMedplumTaskStatus(`TASK-${this.currentFixture.id}-v${this.inputVersion}`, 'on-hold', 'تحتاج استكمالاً');
-      } else if (result.route === 'denial-review' || result.route === 'ai-evidence') {
-        this.localStatus = 'فحص قواعد';
+      if (!result.passed) {
+        if (result.route === 'needs-correction') {
+          this.localStatus = 'تحتاج استكمالاً';
+          this.nodeStatuses.rules.state = 'BLOCKED';
+          this.nodeStatuses.rules.infoAr = result.violations[0]?.messageAr;
+          this.metrics.correctionRequiredCount += 1;
+          await updateMedplumTaskStatus(`TASK-${this.currentFixture.id}-v${this.inputVersion}`, 'on-hold', 'تحتاج استكمالاً');
+        } else if (result.route === 'denial-review' || result.route === 'ai-evidence') {
+          this.localStatus = 'فحص قواعد';
+          this.nodeStatuses.rules.state = 'PASS';
+        }
+      } else {
         this.nodeStatuses.rules.state = 'PASS';
+        this.localStatus = 'بانتظار مراجع';
+        this.humanReviewStartTime = Date.now();
+        await updateMedplumTaskStatus(`TASK-${this.currentFixture.id}-v${this.inputVersion}`, 'ready', 'بانتظار مراجع');
       }
-    } else {
-      this.nodeStatuses.rules.state = 'PASS';
-      this.localStatus = 'بانتظار مراجع';
-      this.humanReviewStartTime = Date.now();
-      await updateMedplumTaskStatus(`TASK-${this.currentFixture.id}-v${this.inputVersion}`, 'ready', 'بانتظار مراجع');
+
+      this.emitEvent('rules.completed', `اكتمال فحص القواعد (${result.engine}) - النتيجة: ${result.passed ? 'اجتياز' : 'تتطلب إجراء'}`, {
+        violationsCount: result.violations.length,
+        route: result.route,
+      });
+
+      this.isRunning = false;
+      this.notify();
+      return result;
+    } catch (err: unknown) {
+      if (err instanceof QuotaExceededError) {
+        this.handleQuotaExceeded(err);
+        return null;
+      }
+      this.isRunning = false;
+      this.notify();
+      throw err;
     }
-
-    this.emitEvent('rules.completed', `اكتمال فحص القواعد (${result.engine}) - النتيجة: ${result.passed ? 'اجتياز' : 'تتطلب إجراء'}`, {
-      violationsCount: result.violations.length,
-      route: result.route,
-    });
-
-    this.isRunning = false;
-    this.notify();
-    return result;
   }
 
   /**
@@ -277,58 +325,68 @@ export class SimulationOrchestrator {
     const doc = this.currentFixture.documents[0];
     const excerpt = doc ? doc.text : '';
 
-    const [reasoning, classification] = await Promise.all([
-      aiGateway.reason({
-        scenarioId: this.currentScenarioId,
-        claimId: this.currentFixture.claim.id,
-        serviceCode: this.currentFixture.claim.serviceCode,
-        clinicalExcerpt: excerpt,
-        priorDenialCode: this.currentFixture.historicalDenial?.code,
-        mode: this.mode,
-        isCustomized: this.isCustomized,
-      }),
-      aiGateway.classify({
-        scenarioId: this.currentScenarioId,
-        claimId: this.currentFixture.claim.id,
-        serviceCode: this.currentFixture.claim.serviceCode,
-        clinicalExcerpt: excerpt,
-        mode: this.mode,
-        isCustomized: this.isCustomized,
-      }),
-    ]);
+    try {
+      const [reasoning, classification] = await Promise.all([
+        aiGateway.reason({
+          scenarioId: this.currentScenarioId,
+          claimId: this.currentFixture.claim.id,
+          serviceCode: this.currentFixture.claim.serviceCode,
+          clinicalExcerpt: excerpt,
+          priorDenialCode: this.currentFixture.historicalDenial?.code,
+          mode: this.mode,
+          isCustomized: this.isCustomized,
+        }),
+        aiGateway.classify({
+          scenarioId: this.currentScenarioId,
+          claimId: this.currentFixture.claim.id,
+          serviceCode: this.currentFixture.claim.serviceCode,
+          clinicalExcerpt: excerpt,
+          mode: this.mode,
+          isCustomized: this.isCustomized,
+        }),
+      ]);
 
-    this.aiReasoning = reasoning;
-    this.aiClassification = classification;
-    this.nodeStatuses.ai.state = 'PASS';
-    this.nodeStatuses.ai.measuredLatencyMs = reasoning.metadata?.latencyMs || 1200;
-    this.nodeStatuses.ai.infoAr = `${reasoning.metadata?.model}`;
+      this.aiReasoning = reasoning;
+      this.aiClassification = classification;
+      this.nodeStatuses.ai.state = 'PASS';
+      this.nodeStatuses.ai.measuredLatencyMs = reasoning.metadata?.latencyMs || 1200;
+      this.nodeStatuses.ai.infoAr = `${reasoning.metadata?.model}`;
 
-    // Metrics updates
-    this.metrics.measuredAiRunsCount += 1;
-    if (typeof reasoning.metadata?.costUsd === 'number') {
-      this.metrics.totalAiCostUsd += reasoning.metadata.costUsd;
-      this.metrics.aiRunsWithCostCount += 1;
-    } else {
-      this.metrics.aiRunsWithoutCostCount += 1;
+      // Metrics updates
+      this.metrics.measuredAiRunsCount += 1;
+      if (typeof reasoning.metadata?.costUsd === 'number') {
+        this.metrics.totalAiCostUsd += reasoning.metadata.costUsd;
+        this.metrics.aiRunsWithCostCount += 1;
+      } else {
+        this.metrics.aiRunsWithoutCostCount += 1;
+      }
+
+      // Evidence coverage metric
+      const findings = reasoning.findings || [];
+      this.metrics.totalEvidenceObservations += findings.length;
+      const validatedCount = findings.filter((f: AIFinding) => f.evidence && f.evidence.length > 0).length;
+      this.metrics.validatedEvidenceObservations += validatedCount;
+
+      this.localStatus = 'بانتظار مراجع';
+      this.humanReviewStartTime = Date.now();
+      await updateMedplumTaskStatus(`TASK-${this.currentFixture.id}-v${this.inputVersion}`, 'ready', 'بانتظار مراجع');
+
+      this.emitEvent('ai.validated', `تم التحقق من مخرجات النموذج ومطابقة الاقتباسات السريرية`, {
+        findingsCount: findings.length,
+        model: reasoning.metadata?.model,
+      });
+
+      this.isRunning = false;
+      this.notify();
+    } catch (err: unknown) {
+      if (err instanceof QuotaExceededError) {
+        this.handleQuotaExceeded(err);
+        return;
+      }
+      this.isRunning = false;
+      this.notify();
+      throw err;
     }
-
-    // Evidence coverage metric
-    const findings = reasoning.findings || [];
-    this.metrics.totalEvidenceObservations += findings.length;
-    const validatedCount = findings.filter((f: AIFinding) => f.evidence && f.evidence.length > 0).length;
-    this.metrics.validatedEvidenceObservations += validatedCount;
-
-    this.localStatus = 'بانتظار مراجع';
-    this.humanReviewStartTime = Date.now();
-    await updateMedplumTaskStatus(`TASK-${this.currentFixture.id}-v${this.inputVersion}`, 'ready', 'بانتظار مراجع');
-
-    this.emitEvent('ai.validated', `تم التحقق من مخرجات النموذج ومطابقة الاقتباسات السريرية`, {
-      findingsCount: findings.length,
-      model: reasoning.metadata?.model,
-    });
-
-    this.isRunning = false;
-    this.notify();
   }
 
   /**

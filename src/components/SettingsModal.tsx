@@ -10,6 +10,7 @@ import {
   CheckCircle2,
   AlertCircle,
   HelpCircle,
+  KeyRound,
 } from 'lucide-react';
 import { SimulationCapabilities } from '../types';
 import { aiGateway } from '../adapters/ai';
@@ -129,9 +130,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 if (capabilities?.isLiveAvailable) {
                   onModeChange('live-ai');
                 } else {
-                  alert(
-                    'لم يتم العثور على OPENROUTER_API_KEY أو GEMINI_API_KEY في بيئة الخادم. يمكنك تزويد المفتاح عبر الأسرار في الخادم.'
-                  );
+                  onClose();
+                  orchestrator.openQuotaModal('يرجى تزويد مفتاح OpenRouter الخاص بك لتفعيل الوضع الحي.');
                 }
               }}
               className={`p-3 rounded-xl border text-right transition ${
@@ -163,6 +163,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
             <div className="text-[10px] text-emerald-700 font-semibold mt-1">
               * تم قفل استهلاك أي رصيد من Google نهائياً لحماية حسابك عند مشاركة الرابط.
+            </div>
+            <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
+              <span className="text-[11px] text-slate-500">مفتاح مخصص للوضع الحي:</span>
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  orchestrator.openQuotaModal();
+                }}
+                className="px-2.5 py-1 rounded-lg bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 text-[11px] font-semibold flex items-center gap-1 transition"
+              >
+                <KeyRound className="w-3.5 h-3.5 text-teal-600" />
+                <span>إدارة / إدخال مفتاح OpenRouter الخاص بك</span>
+              </button>
             </div>
           </div>
         </div>

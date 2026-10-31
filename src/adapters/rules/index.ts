@@ -5,6 +5,7 @@
  */
 
 import { RuleEngineType, RuleInput, RuleProposal, RuleResult, RuleViolation } from '../../types';
+import { getUserOpenRouterKey, QuotaExceededError } from '../keyStore';
 
 export class SimulationRulesAdapter {
   private engineType: RuleEngineType;
@@ -48,9 +49,15 @@ export class SimulationRulesAdapter {
     // 1. In Live AI mode, evaluate via OpenRouter decisions model typesafe/jev-1.13
     if (mode === 'live-ai') {
       try {
+        const userKey = getUserOpenRouterKey();
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (userKey) {
+          headers['x-user-openrouter-key'] = userKey;
+        }
+
         const response = await fetch('/api/sim/rules/evaluate', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers,
           body: JSON.stringify({
             ...input,
             activeLearnedRule: this.activeLearnedRule,
@@ -60,8 +67,26 @@ export class SimulationRulesAdapter {
         if (response.ok) {
           const liveResult: RuleResult = await response.json();
           return liveResult;
+        } else {
+          const errData = await response.json().catch(() => ({}));
+          if (
+            response.status === 402 ||
+            response.status === 401 ||
+            errData.isQuotaError ||
+            errData.code === 'INSUFFICIENT_CREDITS' ||
+            errData.code === 'MISSING_KEY'
+          ) {
+            throw new QuotaExceededError(
+              errData.error || 'نفد رصيد حساب OpenRouter للوضع الحي.',
+              errData.code || 'INSUFFICIENT_CREDITS',
+              errData.details
+            );
+          }
         }
       } catch (err) {
+        if (err instanceof QuotaExceededError) {
+          throw err;
+        }
         console.warn('Live rules evaluation failed, falling back to local evaluation:', err);
       }
     }

@@ -26,19 +26,59 @@ const RULES_MODEL = 'typesafe/jev-1.13';
 const CLASSIFIER_MODEL = process.env.AI_CLASSIFIER_MODEL || 'qwen/qwen-2.5-72b-instruct';
 const REASONER_MODEL = process.env.AI_REASONER_MODEL || 'qwen/qwen-2.5-72b-instruct';
 
-// Helper to get OpenRouter Key dynamically
-function getOpenRouterKey(): string {
-  const key = (process.env.OPENROUTER_API_KEY || process.env.OPENROUTER_API_KE || '').trim();
-  if (!key || key === 'MY_OPENROUTER_KEY') {
-    return '';
+// Helper to get OpenRouter Key dynamically from custom user header or server environment
+function getOpenRouterKey(req?: express.Request): { key: string; source: 'user' | 'server' | 'none' } {
+  if (req) {
+    const userKey = (req.headers['x-user-openrouter-key'] as string || '').trim();
+    if (userKey && userKey !== 'MY_OPENROUTER_KEY') {
+      return { key: userKey, source: 'user' };
+    }
   }
-  return key;
+  const envKey = (process.env.OPENROUTER_API_KEY || process.env.OPENROUTER_API_KE || '').trim();
+  if (envKey && envKey !== 'MY_OPENROUTER_KEY') {
+    return { key: envKey, source: 'server' };
+  }
+  return { key: '', source: 'none' };
+}
+
+interface OpenRouterError extends Error {
+  status?: number;
+  isQuotaError?: boolean;
+  openRouterPayload?: any;
+}
+
+function parseOpenRouterError(status: number, responseText: string): OpenRouterError {
+  let parsed: any = null;
+  try {
+    parsed = JSON.parse(responseText);
+  } catch {
+    // text
+  }
+
+  const message = parsed?.error?.message || responseText || `HTTP ${status}`;
+  const code = parsed?.error?.code || status;
+  const isQuota =
+    status === 402 ||
+    code === 402 ||
+    /credit|balance|insufficient|payment\s*required|exceeded.*quota/i.test(message) ||
+    /run\s*out\s*of\s*credits/i.test(message);
+
+  const isInvalidKey =
+    status === 401 ||
+    code === 401 ||
+    /invalid.*key|unauthorized|user\s*not\s*found/i.test(message);
+
+  const err: OpenRouterError = new Error(message);
+  err.status = status;
+  err.isQuotaError = isQuota || isInvalidKey;
+  err.openRouterPayload = parsed;
+  return err;
 }
 
 // 1. GET /api/sim/capabilities
-app.get('/api/sim/capabilities', (_req, res) => {
-  const openRouterKey = getOpenRouterKey();
-  const isLiveAvailable = Boolean(openRouterKey);
+app.get('/api/sim/capabilities', (req, res) => {
+  const { key, source } = getOpenRouterKey(req);
+  const isLiveAvailable = Boolean(key);
 
   res.json({
     dataMode: 'medplum-mock-client',
@@ -49,11 +89,55 @@ app.get('/api/sim/capabilities', (_req, res) => {
     provider: 'OpenRouter Exclusively (Zero Google API Usage)',
     isLiveAvailable,
     hasOpenRouterKey: isLiveAvailable,
+    keySource: source,
     hasGeminiKey: false, // Explicitly disabled to protect Google quota
     systemNoticeAr: isLiveAvailable
-      ? 'الوضع الحي يعمل بنسبة 100% عبر OpenRouter (محرك القواعد: typesafe/jev-1.13، والاستدلال: Qwen 2.5 72B). تم تعطيل أي استهلاك لخدمات Google نهائياً.'
+      ? source === 'user'
+        ? 'الوضع الحي يعمل عبر مفتاح OpenRouter الخاص بك (محرك القواعد: typesafe/jev-1.13، والاستدلال: Qwen 2.5 72B).'
+        : 'الوضع الحي يعمل بنسبة 100% عبر OpenRouter (محرك القواعد: typesafe/jev-1.13، والاستدلال: Qwen 2.5 72B). تم تعطيل أي استهلاك لخدمات Google نهائياً.'
       : 'الوضع الثابت (محاكاة) نشط افتراضياً دون الحاجة لأي مفاتيح برمجية خارجية.',
   });
+});
+
+// Endpoint to test an OpenRouter API key validity and inspect credits/usage
+app.post('/api/sim/openrouter/test-key', async (req, res) => {
+  const apiKey = (req.body.apiKey || '').trim();
+  if (!apiKey) {
+    return res.status(400).json({ valid: false, error: 'يرجى تقديم مفتاح API للاختبار' });
+  }
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 12000);
+    const response = await fetch('https://openrouter.ai/api/v1/auth/key', {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+      },
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    const data = await response.json().catch(() => ({}));
+
+    if (response.ok && data?.data) {
+      return res.json({
+        valid: true,
+        data: data.data,
+      });
+    }
+
+    const errMessage = data?.error?.message || `HTTP ${response.status}`;
+    return res.status(response.status >= 400 && response.status < 500 ? response.status : 400).json({
+      valid: false,
+      error: errMessage,
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      valid: false,
+      error: err.message || 'فشل الاتصال بـ OpenRouter',
+    });
+  }
 });
 
 // Helper for OpenRouter Decisions API (Used for Rules Engine: typesafe/jev-1.13)
@@ -77,7 +161,7 @@ async function callOpenRouterDecisions(apiKey: string, payload: Record<string, u
 
     if (!response.ok) {
       const errText = await response.text();
-      throw new Error(`OpenRouter Decisions error (${response.status}): ${errText.slice(0, 200)}`);
+      throw parseOpenRouterError(response.status, errText);
     }
 
     return await response.json();
@@ -116,7 +200,7 @@ async function callOpenRouterChat(apiKey: string, model: string, systemPrompt: s
 
     if (!response.ok) {
       const errText = await response.text();
-      throw new Error(`OpenRouter Chat error (${response.status}): ${errText.slice(0, 200)}`);
+      throw parseOpenRouterError(response.status, errText);
     }
 
     const data = await response.json();
@@ -134,9 +218,13 @@ async function callOpenRouterChat(apiKey: string, model: string, systemPrompt: s
 
 // 2. POST /api/sim/rules/evaluate (Powered by typesafe/jev-1.13 via OpenRouter)
 app.post('/api/sim/rules/evaluate', async (req, res) => {
-  const apiKey = getOpenRouterKey();
+  const { key: apiKey } = getOpenRouterKey(req);
   if (!apiKey) {
-    return res.status(503).json({ error: 'OpenRouter API key is required for live rules evaluation' });
+    return res.status(401).json({
+      error: 'مفتاح OpenRouter غير متوفر للوضع الحي. يرجى تزويد مفتاح خاص بك للمتابعة.',
+      code: 'MISSING_KEY',
+      isQuotaError: true,
+    });
   }
 
   const { claimId, serviceCode, amount, memberId, hasSupportingDoc, docText, priorDenialCode, isAppeal, activeLearnedRule } = req.body;
@@ -265,15 +353,27 @@ app.post('/api/sim/rules/evaluate', async (req, res) => {
     });
   } catch (err: any) {
     console.error('Rules evaluation error:', err);
+    if (err.isQuotaError || err.status === 402) {
+      return res.status(402).json({
+        error: 'نفد رصيد حساب OpenRouter للوضع الحي، أو أن الرصيد غير كافٍ لتنفيذ فحص القواعد.',
+        code: 'INSUFFICIENT_CREDITS',
+        isQuotaError: true,
+        details: err.message,
+      });
+    }
     return res.status(500).json({ error: err.message || 'Error evaluating rules via OpenRouter' });
   }
 });
 
 // 3. POST /api/sim/ai/classify (Powered by Qwen 2.5 72B via OpenRouter)
 app.post('/api/sim/ai/classify', async (req, res) => {
-  const apiKey = getOpenRouterKey();
+  const { key: apiKey } = getOpenRouterKey(req);
   if (!apiKey) {
-    return res.status(503).json({ error: 'OpenRouter API key is required' });
+    return res.status(401).json({
+      error: 'مفتاح OpenRouter غير متوفر للوضع الحي. يرجى تزويد مفتاح خاص بك للمتابعة.',
+      code: 'MISSING_KEY',
+      isQuotaError: true,
+    });
   }
 
   const { scenarioId, serviceCode, clinicalExcerpt } = req.body;
@@ -318,15 +418,27 @@ Return JSON ONLY strictly adhering to:
     });
   } catch (err: any) {
     console.error('Classification error:', err);
+    if (err.isQuotaError || err.status === 402) {
+      return res.status(402).json({
+        error: 'نفد رصيد حساب OpenRouter للوضع الحي، أو أن الرصيد غير كافٍ للتصنيف السريري.',
+        code: 'INSUFFICIENT_CREDITS',
+        isQuotaError: true,
+        details: err.message,
+      });
+    }
     return res.status(500).json({ error: err.message || 'Internal OpenRouter error' });
   }
 });
 
 // 4. POST /api/sim/ai/reason (Powered by Qwen 2.5 72B via OpenRouter)
 app.post('/api/sim/ai/reason', async (req, res) => {
-  const apiKey = getOpenRouterKey();
+  const { key: apiKey } = getOpenRouterKey(req);
   if (!apiKey) {
-    return res.status(503).json({ error: 'OpenRouter API key is required' });
+    return res.status(401).json({
+      error: 'مفتاح OpenRouter غير متوفر للوضع الحي. يرجى تزويد مفتاح خاص بك للمتابعة.',
+      code: 'MISSING_KEY',
+      isQuotaError: true,
+    });
   }
 
   const { scenarioId, serviceCode, clinicalExcerpt, isAppeal, priorDenialCode } = req.body;
@@ -387,6 +499,14 @@ Return JSON ONLY strictly adhering to:
     });
   } catch (err: any) {
     console.error('Reasoning error:', err);
+    if (err.isQuotaError || err.status === 402) {
+      return res.status(402).json({
+        error: 'نفد رصيد حساب OpenRouter للوضع الحي، أو أن الرصيد غير كافٍ للاستدلال السريري.',
+        code: 'INSUFFICIENT_CREDITS',
+        isQuotaError: true,
+        details: err.message,
+      });
+    }
     return res.status(500).json({ error: err.message || 'Internal OpenRouter error' });
   }
 });

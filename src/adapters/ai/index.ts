@@ -7,6 +7,7 @@
 import { AIClassificationContract, AIReasoningContract, ScenarioId, SimulationCapabilities } from '../../types';
 import { STATIC_AI_CLASSIFICATION, STATIC_AI_REASONING } from './fixtures';
 import { verifyEvidenceQuote } from '../../domain/minimization';
+import { getUserOpenRouterKey, QuotaExceededError } from '../keyStore';
 
 export interface AIInvocationRequest {
   scenarioId: ScenarioId;
@@ -24,7 +25,10 @@ export class AIGatewayAdapter {
 
   public async fetchCapabilities(): Promise<SimulationCapabilities> {
     try {
-      const res = await fetch('/api/sim/capabilities');
+      const userKey = getUserOpenRouterKey();
+      const res = await fetch('/api/sim/capabilities', {
+        headers: userKey ? { 'x-user-openrouter-key': userKey } : undefined,
+      });
       if (res.ok) {
         this.capabilities = await res.json();
         return this.capabilities!;
@@ -56,9 +60,15 @@ export class AIGatewayAdapter {
     // 1. If user explicitly requests Live AI, try calling backend
     if (req.mode === 'live-ai') {
       try {
+        const userKey = getUserOpenRouterKey();
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (userKey) {
+          headers['x-user-openrouter-key'] = userKey;
+        }
+
         const response = await fetch('/api/sim/ai/reason', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers,
           body: JSON.stringify({
             scenarioId: req.scenarioId,
             serviceCode: req.serviceCode,
@@ -75,9 +85,25 @@ export class AIGatewayAdapter {
           return liveData;
         } else {
           const errData = await response.json().catch(() => ({}));
+          if (
+            response.status === 402 ||
+            response.status === 401 ||
+            errData.isQuotaError ||
+            errData.code === 'INSUFFICIENT_CREDITS' ||
+            errData.code === 'MISSING_KEY'
+          ) {
+            throw new QuotaExceededError(
+              errData.error || 'نفد رصيد حساب OpenRouter للوضع الحي.',
+              errData.code || 'INSUFFICIENT_CREDITS',
+              errData.details
+            );
+          }
           throw new Error(errData.error || `Server AI error: ${response.status}`);
         }
       } catch (err: unknown) {
+        if (err instanceof QuotaExceededError) {
+          throw err;
+        }
         console.warn('Live AI call failed, falling back to static fixture:', err);
       }
     }
@@ -144,9 +170,15 @@ export class AIGatewayAdapter {
 
     if (req.mode === 'live-ai') {
       try {
+        const userKey = getUserOpenRouterKey();
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (userKey) {
+          headers['x-user-openrouter-key'] = userKey;
+        }
+
         const response = await fetch('/api/sim/ai/classify', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers,
           body: JSON.stringify({
             scenarioId: req.scenarioId,
             serviceCode: req.serviceCode,
@@ -157,8 +189,26 @@ export class AIGatewayAdapter {
         if (response.ok) {
           const liveData: AIClassificationContract = await response.json();
           return liveData;
+        } else {
+          const errData = await response.json().catch(() => ({}));
+          if (
+            response.status === 402 ||
+            response.status === 401 ||
+            errData.isQuotaError ||
+            errData.code === 'INSUFFICIENT_CREDITS' ||
+            errData.code === 'MISSING_KEY'
+          ) {
+            throw new QuotaExceededError(
+              errData.error || 'نفد رصيد حساب OpenRouter للوضع الحي.',
+              errData.code || 'INSUFFICIENT_CREDITS',
+              errData.details
+            );
+          }
         }
-      } catch (err) {
+      } catch (err: unknown) {
+        if (err instanceof QuotaExceededError) {
+          throw err;
+        }
         console.warn('Live classification call failed, falling back to static fixture:', err);
       }
     }

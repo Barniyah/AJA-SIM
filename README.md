@@ -1,6 +1,6 @@
 # أجا | محاكي دورة الإيرادات الصحية وذكاء القيمة (AJA RCM Simulator)
 
-[![Version](https://img.shields.io/badge/version-2.1.1-blue.svg)](./Project_status.md)
+[![Version](https://img.shields.io/badge/version-2.2.0-blue.svg)](./Project_status.md)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](./LICENSE)
 [![Standards](https://img.shields.io/badge/FHIR-R4--Medplum-red.svg)](https://www.medplum.com)
 [![Rules Engine](https://img.shields.io/badge/Rules-typesafe%2Fjev--1.13-orange.svg)](https://openrouter.ai)
@@ -314,6 +314,16 @@ npm start
 ---
 
 ## 10. سجل الإصدارات والتحديثات (Changelog)
+
+### [v2.2.0] - 2026-10-30
+- **إدارة نفاذ رصيد OpenRouter وتوفير مفتاح خاص للمستخدم (Custom API Key & Quota Management):**
+  - **التقاط أخطاء نفاذ الرصيد (Graceful Quota Handling):** رصد استجابات `402 Payment Required` أو أخطاء نفاذ الرصيد (`Insufficient credits / balance too low`) وإيقاف التشغيل التلقائي فوراً دون انهيار.
+  - **نافذة تفاعلية لإشعار المستخدم (`ApiKeyModal`):** تنبيه المستخدم بلغة عربية واضحة تشرح سبب التوقف عند نفاذ الرصيد أو غياب المفتاح.
+  - **إدخال واختبار مفتاح OpenRouter الخاص:** إمكانية إدخال المستخدم لمفتاحه الشخصي من OpenRouter، واختباره فورياً عبر استدعاء نقطة النهاية المباشرة `/api/sim/openrouter/test-key` للتحقق من صلاحيته ورصيده.
+  - **حفظ محلي آمن في المتصفح:** حفظ المفتاح الخاص في `localStorage` وإرساله حصراً عبر الترويسة `x-user-openrouter-key` إلى خادم التطبيق مع أولوية قصوى على مفتاح الخادم.
+  - **زر وصول سريع في الترويسة (Header):** زر «مفتاح AI» يتيح للمستخدم ضبط، تعديل، أو حذف مفتاحه في أي وقت، مع مؤشر لحالة المفتاح.
+  - **خيار التبديل للوضع الثابت:** إتاحة زر مباشر للتحويل إلى الوضع الثابت (المحاكاة) لمتابعة استكشاف النظام بدون أي تكلفة أو مفاتيح.
+  - **حماية تامة لحساب Google:** التأكيد البرمجي على صفر استهلاك لأي رصيد من Google.
 
 ### [v2.1.1] - 2026-10-30
 - **إصلاح وجاهزية النشر على Google Cloud Run (Full-Stack Deployment Fix):**

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Play,
   StepForward,
@@ -11,9 +11,11 @@ import {
   CheckCircle2,
   AlertCircle,
   HelpCircle,
+  KeyRound,
 } from 'lucide-react';
 import { LocalWorkflowStatus, ScenarioId } from '../types';
 import { orchestrator } from '../orchestration';
+import { getUserOpenRouterKey, subscribeUserKeyChanges } from '../adapters/keyStore';
 
 interface HeaderProps {
   currentScenarioId: ScenarioId;
@@ -24,6 +26,7 @@ interface HeaderProps {
   onOpenSettings: () => void;
   onOpenCustomScenario: () => void;
   onOpenHelp: () => void;
+  onOpenApiKeyModal: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -35,7 +38,16 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenSettings,
   onOpenCustomScenario,
   onOpenHelp,
+  onOpenApiKeyModal,
 }) => {
+  const [hasUserKey, setHasUserKey] = useState(Boolean(getUserOpenRouterKey()));
+
+  useEffect(() => {
+    return subscribeUserKeyChanges((key) => {
+      setHasUserKey(Boolean(key));
+    });
+  }, []);
+
   const scenarios: Array<{ id: ScenarioId; label: string; desc: string }> = [
     { id: 'S1', label: 'الحالة 1 (S1)', desc: 'مكتملة 300 ر.س' },
     { id: 'S2', label: 'الحالة 2 (S2)', desc: 'رقم عضوية ناقص' },
@@ -111,6 +123,20 @@ export const Header: React.FC<HeaderProps> = ({
           >
             <Sliders className="w-3.5 h-3.5 text-teal-300" />
             <span className="hidden sm:inline">تخصيص حالة</span>
+          </button>
+
+          <button
+            onClick={onOpenApiKeyModal}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium border transition ${
+              hasUserKey
+                ? 'bg-teal-900/60 hover:bg-teal-800/80 text-teal-200 border-teal-600/70'
+                : 'bg-emerald-800/60 hover:bg-emerald-700/80 text-emerald-100 border border-emerald-700/60'
+            }`}
+            title="إعداد مفتاح OpenRouter للوضع الحي وفحص الرصيد"
+          >
+            <KeyRound className={`w-3.5 h-3.5 ${hasUserKey ? 'text-teal-300' : 'text-amber-300'}`} />
+            <span className="hidden sm:inline">مفتاح AI</span>
+            {hasUserKey && <span className="w-1.5 h-1.5 rounded-full bg-teal-400" title="مفتاح خاص مفعل" />}
           </button>
 
           <button

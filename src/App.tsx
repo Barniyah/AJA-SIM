@@ -15,6 +15,7 @@ import { LearnTogetherModal } from './components/LearnTogetherModal';
 import { CustomScenarioModal } from './components/CustomScenarioModal';
 import { SettingsModal } from './components/SettingsModal';
 import { HelpModal } from './components/HelpModal';
+import { ApiKeyModal } from './components/ApiKeyModal';
 
 export default function App() {
   const [snapshot, setSnapshot] = useState(orchestrator.getSnapshot());
@@ -22,6 +23,7 @@ export default function App() {
   const [isCustomScenarioOpen, setIsCustomScenarioOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isHelpOpen, setIsHelpOpen] = useState(false);
+  const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState(false);
   const [selectedNodeId, setSelectedNodeId] = useState<string>('core');
 
   useEffect(() => {
@@ -30,6 +32,8 @@ export default function App() {
     });
     return unsubscribe;
   }, []);
+
+  const isAnyKeyModalOpen = isApiKeyModalOpen || Boolean(snapshot.quotaAlert?.isOpen);
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans flex flex-col selection:bg-emerald-100 selection:text-emerald-900">
@@ -43,6 +47,7 @@ export default function App() {
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenCustomScenario={() => setIsCustomScenarioOpen(true)}
         onOpenHelp={() => setIsHelpOpen(true)}
+        onOpenApiKeyModal={() => setIsApiKeyModalOpen(true)}
       />
 
       {/* Main Container */}
@@ -143,6 +148,16 @@ export default function App() {
       <HelpModal
         isOpen={isHelpOpen}
         onClose={() => setIsHelpOpen(false)}
+      />
+
+      <ApiKeyModal
+        isOpen={isAnyKeyModalOpen}
+        onClose={() => {
+          setIsApiKeyModalOpen(false);
+          orchestrator.closeQuotaModal();
+        }}
+        quotaMessage={snapshot.quotaAlert?.message}
+        quotaDetails={snapshot.quotaAlert?.details}
       />
     </div>
   );
